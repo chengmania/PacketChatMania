@@ -35,7 +35,7 @@
 
 ```bash
 pip install ttkbootstrap
-
+```
 
 ## 🖥️ Features
 
@@ -52,14 +52,10 @@ pip install ttkbootstrap
 
 ---
 
-
 ## 🔧 Configuration
 
 Callsign must be set before transmitting or connecting to a TNC.  
 Additional settings will be saved in `config.ini` (coming soon).
-
----
-
 
 ---
 
