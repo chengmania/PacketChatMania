@@ -28,9 +28,14 @@
 ### Requirements
 
 - Python 3.10+
-- Tkinter (comes with Python)
-- `ttkbootstrap`
-- A KISS-compatible TNC (e.g., **Direwolf**, `kissattach`, etc.)
+- `Tkinter` (comes with Python)
+- `ttkbootstrap` (install via pip)
+- A KISS-compatible TNC such as:
+  - [Direwolf](https://github.com/wb2osz/direwolf)
+  - `kissattach` or any KISS-over-TCP interface
+
+```bash
+pip install ttkbootstrap
 
 
 ## 🖥️ Features
