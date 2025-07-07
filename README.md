@@ -72,3 +72,43 @@ Additional settings will be saved in `config.ini` (coming soon).
 ## 📜 License
 
 MIT License. See `LICENSE` file.
+
+
+## ▶️ Running the App (Linux & Windows)
+
+You can run **PacketChat4** using a virtual environment (`venv`) for clean and isolated dependencies.
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/chengmania/PacketChatMania.git
+cd PacketChatMania/src
+
+# 2. Create a virtual environment
+python3 -m venv .
+
+# 3. Activate the virtual environment
+# 🐧 Linux/macOS:
+source ./bin/activate
+
+# 🪟 Windows (Command Prompt):
+# \Scripts\activate.bat
+
+# 🪟 Windows (PowerShell):
+# \Scripts\Activate.ps1
+
+# 4. Install required packages
+pip install -r requirements.txt
+
+# 5. Run the application in Linux
+python3 ./main.py
+
+To Run the application in Windows
+python main.py
+```
+
+💡 *To deactivate the virtual environment when you're done:*
+
+```bash
+deactivate
+```
+
