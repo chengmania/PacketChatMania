@@ -31,7 +31,6 @@
 - `ttkbootstrap` (install via pip)
 - A KISS-compatible TNC such as:
   - [Direwolf](https://github.com/wb2osz/direwolf)
-  - `kissattach` or any KISS-over-TCP interface
 
 ```bash
 pip install ttkbootstrap
