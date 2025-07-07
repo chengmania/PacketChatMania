@@ -14,7 +14,6 @@
 
 - ✅ Real-time AX.25 chat over Direwolf or compatible KISS TNC
 - ✅ Unproto support and digipeater routing
-- ✅ File transfers with ACK/NACK, progress bar, and retry logic
 - ✅ Acoustic modem compatibility (mic/speaker-based)
 - ✅ Heard stations list with clickable callsigns
 - ✅ Auto-ACK and mailbox (in development)
