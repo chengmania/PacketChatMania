@@ -10,7 +10,7 @@
 
 ## 🧭 Overview
 
-**PacketChat4** is a modern, lightweight ham radio packet chat application for acoustic and TNC-based communication using the AX.25 protocol. Designed for real-time messaging and file sharing(not implemented yet), it offers a clean GUI and robust features including:
+**Packet ChatMania** is a modern, lightweight ham radio packet chat application for acoustic and TNC-based communication using the AX.25 protocol. Designed for real-time messaging and file sharing(not implemented yet), it offers a clean GUI and robust features including:
 
 - ✅ Real-time AX.25 chat over Direwolf or compatible KISS TNC
 - ✅ Unproto support and digipeater routing
