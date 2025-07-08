@@ -1,4 +1,4 @@
-# 📡 PacketChat4 – AX.25 Acoustic Packet Chat Application
+# 📡 Packet ChatMania – AX.25 Acoustic Packet Chat Application
 
 **Author**: Greg (KC3SMW)  
 **License**: MIT  
