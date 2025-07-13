@@ -11,13 +11,14 @@ default_config = {
     },
     "User": {
         "callsign": "N0CALL",
-        "cq_message": "CQ CQ CQ de N0CALL"
+        "cq_message": "CQ CQ CQ de N0CALL",
+        "acks": "true"
     },
     "Beacon": {
-    "enabled": "false",
-    "interval": "15",
-    "message": "ChatMania App with mailbox",
-    "digipeater": ""
+        "enabled": "false",
+        "interval": "15",
+        "message": "ChatMania App with mailbox",
+        "digipeater": ""
     }
 }
 

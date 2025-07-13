@@ -1,6 +1,7 @@
 # tnc.py
 import socket
 import threading
+from tnclog import log_raw_line
 
 class TNCClient:
     def __init__(self, on_data_received, on_status_update, set_connection_light):
@@ -22,6 +23,7 @@ class TNCClient:
             self.running = True
             self.set_connection_light("green")
             self.on_status_update(f"Connected to {host}:{port} as {callsign}")
+            log_raw_line(f"📡 Connected to {host}:{port} as {callsign}")
             self.thread = threading.Thread(target=self.receive_loop, daemon=True)
             self.thread.start()
             return True
@@ -38,6 +40,7 @@ class TNCClient:
                 self.socket.close()
             self.set_connection_light("red")
             self.on_status_update("Disconnected from TNC")
+            log_raw_line("📴 Disconnected from TNC")
         except Exception as e:
             self.on_status_update(f"Error disconnecting: {e}")
 

@@ -1,4 +1,3 @@
-# main.py (excerpt with unified ACK system)
 from gui import PacketChatGUI
 from tnc import TNCClient
 from ax25 import ax25_ui_frame, wrap_kiss
@@ -7,15 +6,16 @@ from config import load_config
 from time import time
 from beacon import BeaconManager
 from chatlog import append_log
-from heardlog import load_heard_stations, save_heard_stations
-from tnclog import log_raw_line
-
+from heardlog import load_heard_stations
+from heardlog import save_heard_stations
 from datetime import datetime, timezone
+
 from file_transfer import FileTransferManager
 from ack_manager import AckManager
 import ttkbootstrap as ttk
-import os
 
+
+import os
 if not os.path.exists("config.ini"):
     from config import save_config, default_config
     save_config(default_config)
@@ -29,9 +29,6 @@ class PacketChatApp:
         self.gui = PacketChatGUI(self.root, on_beacon_toggle=self.handle_beacon_toggle)
         self.callsign = self.config.get("User", "callsign", fallback="N0CALL")
         self.gui.callsign = self.callsign  # ✅ this is the missing line
-
-        self.channel_busy = False
-        self.last_heard_time = time()
 
         #load Heard stations
         self.recalled_calls = set()
@@ -69,12 +66,9 @@ class PacketChatApp:
         self.gui.send_message = self.send_message
 
         # Setup TNC client
-        def update_status_and_log(msg):
-            self.gui.status_var.set(msg)
-            log_raw_line(f"[STATUS] {msg}")
         self.tnc = TNCClient(
             on_data_received=self.handle_incoming_data,
-            on_status_update=update_status_and_log,
+            on_status_update=self.gui.status_var.set,
             set_connection_light=self.gui.set_connection_light
         )
 
@@ -83,6 +77,14 @@ class PacketChatApp:
         self.gui.send_button.config(command=self.send_message)
         self.gui.stop_button.config(command=self.stop_transmission)
         self.gui.msg_entry.bind("<Return>", lambda e: self.send_message())
+
+        
+        # Ack Manager
+        self.ack_manager = AckManager(
+            send_fn=self.send_ax25_frame,
+            status_fn=self.gui.status_var.set
+        )
+        self.root.after(5000, self.poll_ack_manager)
 
         # File Transfer Manager
         self.ft = FileTransferManager(
@@ -95,19 +97,6 @@ class PacketChatApp:
         self.gui.send_file_button.config(command=self.send_file)
 
         self.sent_messages = []
-
-        # ACK Manager
-        self.ack_manager = AckManager(
-            send_fn=self.send_ax25_frame,
-            status_fn=self.gui.status_var.set,
-            debug_fn=self.gui.log_raw,
-            alert_fn=self.gui.append_text,
-            my_call=self.callsign.upper()
-        )
-        self.ack_manager.debug = True  # Turn on for now, off later
-        self.ack_manager.max_retries = 3
-        self.root.after(5000, self.poll_ack_manager)
-
 
     def toggle_connection(self):
         if self.tnc.running:
@@ -129,12 +118,8 @@ class PacketChatApp:
             self.beacon.stop()
             self.gui.set_beacon_light("gray")
 
-    def send_message(self):
-        if self.channel_busy:
-            self.gui.log_raw("⚠️ Channel busy. Delaying transmit...")
-            self.root.after(500, self.send_message)  # Retry in 0.5 seconds
-            return
 
+    def send_message(self):
         self.beacon.reset_idle_timer()
 
         msg = self.gui.msg_entry.get().strip()
@@ -143,6 +128,8 @@ class PacketChatApp:
 
         src = self.gui.callsign_label_var.get().upper()
         dest = self.gui.dest_entry.get().strip().upper()
+
+        # If Unproto Mode is ON and destination is blank, default to CQ
         if not dest:
             dest = "CQ"
         digi = self.gui.digi_entry.get().upper() if self.gui.digi_entry.get().strip() else None
@@ -150,33 +137,18 @@ class PacketChatApp:
         if digi and not digi.isalnum():
             print(f"⚠️ Invalid digipeater: {digi} — ignoring.")
             digi = None
-
-        # Determine if this message should be tracked for ACK
-        if dest in ("CQ", "BEACON", "ALL", "QST", "ID"):
-            full_msg = msg
-        elif self.gui.acks_enabled_var.get():
-            msg_id = self.ack_manager.generate_id()
-            full_msg = f"[MSGID]{msg_id}|{msg}"
-            self.ack_manager.track(msg_id, src, dest, full_msg, digi)
-        else:
-            full_msg = msg
-
+        
+        msg_id = self.ack_manager.generate_id()
+        full_msg = f"[MSGID]{msg_id}|{msg}"
+        self.ack_manager.track(msg_id, src, dest, full_msg, digi)
         frame = ax25_ui_frame(dest, src, full_msg, digipeater=digi)
-        self.tnc.send(wrap_kiss(frame))
-        # ✅ Log outgoing message to Raw window
-        path_str = f",{digi}" if digi else ""
-        # Strip [MSGID] for readability if present
-        display_msg = msg
-        if full_msg.startswith("[MSGID]") and "|" in full_msg:
-            display_msg = full_msg.split("|", 1)[1]
-        if hasattr(self.gui, "log_raw"):
-            self.gui.log_raw(f"[TX] {src}>{dest}{path_str}: {display_msg}")
-            log_raw_line(f"[TX] {src}>{dest}{path_str}: {display_msg}")  # line is the raw message being printed
 
-
+        kiss = wrap_kiss(frame)
+        self.tnc.send(kiss)
         self.sent_messages.append((src, dest, msg))
-        if len(self.sent_messages) > 20:
+        if len(self.sent_messages) > 20:  # Limit history to avoid memory buildup
             self.sent_messages.pop(0)
+
 
         line = f"{src}>{dest},{digi}: {msg}" if digi else f"{src}>{dest}: {msg}"
         self.gui.append_text(line, "sent")
@@ -186,34 +158,50 @@ class PacketChatApp:
         append_log(dest.upper(), self.callsign.upper(), msg)
 
 
+    def stop_transmission(self):
+        self.gui.status_var.set("Transmission stopped by user.")
+        self.gui.append_text("Stopped transmission", "sent")
 
-    def send_ax25_frame(self, src, dest, msg, digi=None, request_ack=False):
-        """
-        Send an AX.25 frame to the TNC. If request_ack is True and the message doesn't
-        already include a [MSGID], one will be added. This function does NOT handle ACK tracking.
-        """
-        if not self.tnc.running:
-            raise RuntimeError("TNC is not connected")
 
-        full_msg = msg
+    def send_ax25_frame(self, src, dest, msg, digi):
+        from ax25 import ax25_ui_frame, wrap_kiss
 
-        # Append a [MSGID] only if requested and not already present
-        if request_ack and "[MSGID]" not in msg:
+        if msg.startswith("[MSGID]") and "|" in msg:
+            # Extract msg_id and skip re-wrapping
+            msg_id = msg.split("[MSGID]")[1].split("|")[0]
+            full_msg = msg
+        else:
             msg_id = self.ack_manager.generate_id()
             full_msg = f"[MSGID]{msg_id}|{msg}"
-            # Note: CALLER must track it separately if needed
+
+        self.ack_manager.track(msg_id, src, dest, full_msg, digi)
 
         frame = ax25_ui_frame(dest, src, full_msg, digipeater=digi)
-        self.tnc.send(wrap_kiss(frame))
+        kiss = wrap_kiss(frame)
+        print(f"📤 [AX.25 SEND] {src} > {dest} via {digi or 'direct'}: {full_msg}")
+        self.tnc.send(kiss)
 
+
+    def send_file(self):
+        self.beacon.reset_idle_timer()
+
+        from tkinter import filedialog
+        filepath = filedialog.askopenfilename()
+        if not filepath:
+            return
+
+        src = self.gui.callsign_label_var.get().upper()
+        dest = self.gui.dest_entry.get().upper()
+        digi = self.gui.digi_entry.get().upper() if self.gui.digi_entry.get().strip() else None
+        self.ft.send_file(filepath, src, dest, digi)
+
+    
+    def poll_ack_manager(self):
+        self.ack_manager.tick()
+        self.root.after(5000, self.poll_ack_manager)
 
     def handle_incoming_data(self, data):
-
         parsed = parse_ax25_frame(data, self.callsign)
-        #if channel is busy
-        self.channel_busy = True
-        self.last_heard_time = time()
-        self.root.after(2000, self.check_channel_clear)  # 2-second grace
 
         print("📥 Incoming KISS Frame:", data.hex())
         if not parsed:
@@ -222,52 +210,52 @@ class PacketChatApp:
 
         print("✅ AX.25 Parsed:", parsed)
 
+        if not parsed:
+            return
+
         src = parsed["src"]
         dest = parsed["dest"]
         info = parsed["info"]
         path_str = "," + ",".join(parsed["digis"]) if parsed["digis"] else ""
 
-        raw_line = f"[RAW] {src}>{dest}{path_str}: {info}"
-        if hasattr(self.gui, "log_raw"):
-            self.gui.log_raw(raw_line)
-            log_raw_line(raw_line)  # line is the raw message being printed
+        if self.gui.raw_text_area:
+            self.gui.raw_text_area.config(state='normal')
+            self.gui.raw_text_area.insert('end', f"[RAW] {src}>{dest}{path_str}: {info}\n")
+            self.gui.raw_text_area.config(state='disabled')
+            self.gui.raw_text_area.yview('end')
 
-        else:
-            print(raw_line)
-
-        # 🟢 Route file transfer messages
+        # 🟡 ROUTE FILE TRANSFER MESSAGES
         if info.startswith("[REQFILE]") or info.startswith("[FILE]") or info.startswith("[DATA]") or info.startswith("[EOF]"):
             self.ft.handle_incoming(info, src, dest, parsed["digis"])
             return
 
-        # 🟢 Handle ACK/NACK/ACKFILE receipts
-        if info.startswith("[ACK]") or info.startswith("[NACK]") or info.startswith("[ACKFILE]"):
+        
+        # 🟢 Handle ACK messages
+        if info.startswith("[ACK]"):
             acked_id = info[5:].strip()
-            self.ack_manager.ack_received(acked_id, from_call=src)
-            self.ft.handle_ack(info)
+            self.ack_manager.ack_received(acked_id)
             return
 
-        # 🟡 Auto reply with ACK (only if enabled)
-        if "[MSGID]" in info and "|" in info and self.gui.acks_enabled_var.get():
+        # 🟢 Auto-ACK reply if enabled
+        if self.gui.auto_ack_enabled_var.get() and "[MSGID]" in info and "|" in info:
             try:
                 msg_id = info.split("[MSGID]")[1].split("|")[0]
-
-                # 🛑 Don't ACK if we are the original sender
-                if src.upper() == self.callsign.upper():
-                    print(f"🛑 Skipping ACK to myself for msg_id {msg_id}")
-                    return
-
                 ack_line = f"[ACK]{msg_id}"
                 self.send_ax25_frame(self.callsign, src, ack_line, ",".join(parsed["digis"]) if parsed["digis"] else None)
             except Exception as e:
                 print("Auto ACK failed:", e)
 
+        # 🟢 Handle ACK/NACK messages
+        if info.startswith("[ACK]") or info.startswith("[NACK]") or info.startswith("[ACKFILE]"):
+            self.ft.handle_ack(info)
+            return
+
         if src.upper() not in self.recalled_calls:
             self.gui.update_heard_station(src, dest, info)
-
+        #log heard stations
         self.heard_stations[src.upper()] = datetime.now(timezone.utc).isoformat()
         save_heard_stations(self.heard_stations)
-
+        # Once heard again live, stop treating as recalled
         self.recalled_calls.discard(src.upper())
 
         last_time, label_type = self.gui.heard_dict.get(src, (time(), ""))
@@ -275,45 +263,19 @@ class PacketChatApp:
         time_str = f"{minutes_ago} min ago" if minutes_ago > 0 else "just now"
         self.gui.last_heard_var.set(f"{src}")
 
-        # Suppress echo
+        # Only suppress echo if it matches the exact last message *we* sent
         if self.sent_messages and (src, dest, info) == self.sent_messages[-1]:
             return
 
         current_chat_partner = self.gui.dest_entry.get().strip().upper()
-
 
         # Only show messages directed to us (not to someone else or broadcast noise)
         if dest.upper() != self.callsign.upper():
             print(f"🔕 Ignoring message to {dest} (not to me: {self.callsign})")
             return
 
-        # Log and display
         append_log(src.upper(), src.upper(), info)
         self.gui.append_text(f"{src}>{dest}{path_str}: {info}", "recv")
-
-    def check_channel_clear(self):
-        if time() - self.last_heard_time > 2:
-            self.channel_busy = False
-
-
-    def poll_ack_manager(self):
-        self.ack_manager.tick()
-        self.root.after(5000, self.poll_ack_manager)
-
-    def send_file(self):
-        from tkinter import filedialog
-        filepath = filedialog.askopenfilename()
-        if filepath:
-            src = self.gui.callsign_label_var.get().upper()
-            dest = self.gui.dest_entry.get().strip().upper()
-            digi = self.gui.digi_entry.get().strip().upper() if self.gui.digi_entry.get().strip() else None
-            self.ft.send_file(filepath, src, dest, digi)
-
-    def stop_transmission(self):
-        self.ft.stop()
-        self.gui.status_var.set("Transmission stopped.")
-        self.gui.append_text("Transmission stopped", "sent")
-
 
 if __name__ == "__main__":
     app = PacketChatApp()

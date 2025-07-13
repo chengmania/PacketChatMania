@@ -12,11 +12,11 @@ class PacketChatGUI:
         self.root = root
         self.on_beacon_toggle = on_beacon_toggle
         self.root.title("Packet ChatMania")
-        self.auto_ack_enabled_var = ttk.BooleanVar(value=False)
+        self.acks_enabled_var = ttk.BooleanVar(value=False)
 
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(2, weight=1)
-
+        self.raw_log_buffer = []
 
 
         # Menu
@@ -26,11 +26,12 @@ class PacketChatGUI:
         menu.add_cascade(label="View", menu=view_menu)
         view_menu.add_command(label="Show Raw TNC Data", command=self.open_raw_window)
         settings_menu = ttk.Menu(menu, tearoff=0)
+
         menu.add_cascade(label="Settings", menu=settings_menu)
         settings_menu.add_command(label="Configure", command=self.open_configure_window)
         settings_menu.add_checkbutton(
-            label="Auto ACK Incoming Messages",
-            variable=self.auto_ack_enabled_var,
+            label="Enable Message ACKs",
+            variable=self.acks_enabled_var,
             onvalue=True,
             offvalue=False
         )
@@ -243,12 +244,28 @@ class PacketChatGUI:
         self.raw_text_area = scrolledtext.ScrolledText(self.raw_window, state='disabled', font=("Courier", 9))
         self.raw_text_area.pack(fill='both', expand=True)
 
+        # 🟢 Flush buffer to window if any
+        self.raw_text_area.config(state='normal')
+        for text in self.raw_log_buffer:
+            self.raw_text_area.insert('end', f"{text}\n")
+        self.raw_text_area.config(state='disabled')
+        self.raw_text_area.yview('end')
+
         def on_close():
             self.raw_window.destroy()
             self.raw_window = None
             self.raw_text_area = None
 
         self.raw_window.protocol("WM_DELETE_WINDOW", on_close)
+
+    def log_raw(self, text):
+        self.raw_log_buffer.append(text)  # ✅ Store in buffer
+        if self.raw_text_area:
+            self.raw_text_area.config(state='normal')
+            self.raw_text_area.insert('end', text + '\n')
+            self.raw_text_area.config(state='disabled')
+            self.raw_text_area.yview('end')
+
 
     def open_configure_window(self):
         config_data = config.load_config()
@@ -307,7 +324,8 @@ class PacketChatGUI:
                 },
                 "User": {
                     "callsign": callsign_var.get(),
-                    "cq_message": cq_msg_var.get()
+                    "cq_message": cq_msg_var.get(),
+                    "acks": str(self.acks_enabled_var.get()).lower()
                 },
                  "Beacon": {
                     "enabled": str(beacon_enabled_var.get()).lower(),
@@ -343,6 +361,18 @@ class PacketChatGUI:
 
         ttk.Button(config_win, text="Save", command=save_and_close).pack(pady=10)
 
+    def add_heard_station(self, call, timestamp, msg_type="direct"):
+        when_str = timestamp.strftime("%H:%M")
+        label_type = msg_type.upper()
+
+        for iid in self.heard_tree.get_children():
+            if self.heard_tree.item(iid)["values"][1] == call:
+                self.heard_tree.delete(iid)
+                break
+
+        self.heard_tree.insert("", 0, values=(when_str, call, label_type))
+
+
     def on_heard_click(self, event):
         selected = self.heard_tree.selection()
         if not selected:
@@ -361,8 +391,12 @@ class PacketChatGUI:
         # Display in receive window
         self.text_area.config(state="normal")
         self.text_area.delete("1.0", "end")
-        self.text_area.insert("end", f"Chat log with {callsign}:\n\n{log_text}")
+        self.text_area.insert("end", f"--- Chat log with {callsign} ---\n", "log")
+        self.text_area.insert("end", log_text, "log")
+        self.text_area.insert("end", f"\n--- End of log ---\n", "log")
         self.text_area.config(state="disabled")
+        self.text_area.see("end")
+
 
 
     def update_heard_station(self, call, to_field, message=None, force_when=None):
