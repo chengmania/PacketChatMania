@@ -33,6 +33,10 @@ class PacketChatApp:
         self.channel_busy = False
         self.last_heard_time = time()
 
+        # For file acceptance logic
+        self.awaiting_file_request = None  # e.g., {"from": "KC3SMW", "filename": "example.txt", "digi": "W3SK"}
+
+
         #load Heard stations
         self.recalled_calls = set()
         for call, iso_time in self.heard_stations.items():
@@ -84,18 +88,6 @@ class PacketChatApp:
         self.gui.stop_button.config(command=self.stop_transmission)
         self.gui.msg_entry.bind("<Return>", lambda e: self.send_message())
 
-        # File Transfer Manager
-        self.ft = FileTransferManager(
-            send_fn=self.send_ax25_frame,
-            status_fn=self.gui.status_var.set,
-            append_fn=self.gui.append_text,
-            progress_fn=self.gui.progress_var.set
-        )
-
-        self.gui.send_file_button.config(command=self.send_file)
-
-        self.sent_messages = []
-
         # ACK Manager
         self.ack_manager = AckManager(
             send_fn=self.send_ax25_frame,
@@ -107,7 +99,22 @@ class PacketChatApp:
         self.ack_manager.debug = True  # Turn on for now, off later
         self.ack_manager.max_retries = 3
         self.root.after(5000, self.poll_ack_manager)
+        self.ack_manager.gui_ref = self
 
+
+        # File Transfer Manager
+        self.ft = FileTransferManager(
+            send_fn=self.send_ax25_frame,
+            status_fn=self.gui.status_var.set,
+            append_fn=self.gui.append_text,
+            progress_fn=self.gui.progress_var.set,
+            ack_mgr=self.ack_manager
+        )
+
+        self.gui.send_file_button.config(command=self.send_file)
+
+        self.sent_messages = []
+        self.sent_line_tags = {}  # msg_id -> line tag
 
     def toggle_connection(self):
         if self.tnc.running:
@@ -138,6 +145,32 @@ class PacketChatApp:
         self.beacon.reset_idle_timer()
 
         msg = self.gui.msg_entry.get().strip()
+        # 🧠 Check for YES/NO reply to incoming file transfer request
+        if self.awaiting_file_request and msg.upper() in ("YES", "NO"):
+            req = self.awaiting_file_request
+            response = msg.upper()
+            self.awaiting_file_request = None
+            self.gui.msg_entry.delete(0, "end")
+
+            if response == "YES":
+                self.gui.append_text(f"✅ Accepted file: {req['filename']}", "sent")
+                log_raw_line(f"[ACKFILE] sent to {req['from']}")
+                ack_msg = "[ACKFILE]"
+                #msg_id = f"REQ_{req['filename']}"
+                #self.ack_manager.track(msg_id, self.callsign, req["from"], ack_msg, digi=req["digi"], msg_type="file")
+            else:
+                self.gui.append_text(f"❌ Declined file: {req['filename']}", "sent")
+                log_raw_line(f"[NACKFILE] sent to {req['from']}")
+                ack_msg = "[NACKFILE]"
+
+            self.send_ax25_frame(
+                self.callsign,
+                req["from"],
+                ack_msg,
+                digi=req["digi"]
+            )
+            return
+
         if not msg or not self.tnc.running:
             return
 
@@ -152,14 +185,21 @@ class PacketChatApp:
             digi = None
 
         # Determine if this message should be tracked for ACK
+        track_ack = False
+        msg_id = None
+        line_tag = None
+
         if dest in ("CQ", "BEACON", "ALL", "QST", "ID"):
             full_msg = msg
         elif self.gui.acks_enabled_var.get():
             msg_id = self.ack_manager.generate_id()
             full_msg = f"[MSGID]{msg_id}|{msg}"
             self.ack_manager.track(msg_id, src, dest, full_msg, digi)
+            line_tag = f"msg_{msg_id}"
+            self.sent_line_tags[msg_id] = line_tag
         else:
             full_msg = msg
+
 
         frame = ax25_ui_frame(dest, src, full_msg, digipeater=digi)
         self.tnc.send(wrap_kiss(frame))
@@ -179,7 +219,7 @@ class PacketChatApp:
             self.sent_messages.pop(0)
 
         line = f"{src}>{dest},{digi}: {msg}" if digi else f"{src}>{dest}: {msg}"
-        self.gui.append_text(line, "sent")
+        self.gui.append_text(line, "sent", custom_tag=line_tag)
         self.gui.msg_entry.delete(0, "end")
         self.gui.set_rx_tx_light("red")
         self.root.after(300, lambda: self.gui.set_rx_tx_light("green"))
@@ -235,17 +275,79 @@ class PacketChatApp:
         else:
             print(raw_line)
 
-        # 🟢 Route file transfer messages
-        if info.startswith("[REQFILE]") or info.startswith("[FILE]") or info.startswith("[DATA]") or info.startswith("[EOF]"):
+
+
+        # 🟢 Handle file transfer messages and ACKs
+        if info.startswith("[REQFILE]"):
+            filename = f"{src}_{int(time())}.dat"
+            self.awaiting_file_request = {
+                "from": src,
+                "to": dest,
+                "filename": filename,
+                "digi": parsed["digis"][0] if parsed["digis"] else None
+            }
+            self.gui.append_text(f"📥 {src} wants to send a file: \"{filename}\"\nType YES to accept or NO to reject.", "recv")
+            log_raw_line(f"[REQFILE] from {src}: {filename}")
+            return
+
+        elif info.startswith("[FILE]"):
+            msg_id = f"FILE_{info[6:].strip()}"
+            self.ack_manager.ack_received(msg_id, from_call=src)
             self.ft.handle_incoming(info, src, dest, parsed["digis"])
             return
 
-        # 🟢 Handle ACK/NACK/ACKFILE receipts
-        if info.startswith("[ACK]") or info.startswith("[NACK]") or info.startswith("[ACKFILE]"):
-            acked_id = info[5:].strip()
-            self.ack_manager.ack_received(acked_id, from_call=src)
+        elif info.startswith("[DATA]"):
+            try:
+                chunk_id = info[6:].split(":")[0]
+                msg_id = f"FT_{chunk_id}"
+                self.ack_manager.ack_received(msg_id, from_call=src)
+            except Exception:
+                pass
+            self.ft.handle_incoming(info, src, dest, parsed["digis"])
+            return
+
+        elif info.startswith("[EOF]"):
+            self.ack_manager.ack_received("EOF_FINAL", from_call=src)
+            self.ft.handle_incoming(info, src, dest, parsed["digis"])
+            return
+
+        elif info.startswith("[ACKFILE]"):
+            log_raw_line(f"🟢 Received [ACKFILE] from {src}")
+            if self.ack_manager.has("REQFILE_INIT"):
+                self.ack_manager.ack_received("REQFILE_INIT", from_call=src)
+                log_raw_line(f"✅ Marked REQFILE_INIT acknowledged from {src}")
+
+            else:
+                log_raw_line(f"⚠️ REQFILE_INIT not found in pending at time of ACKFILE from {src}")
+
             self.ft.handle_ack(info)
             return
+
+        elif info.startswith("[ACK]"):
+            ack_payload = info[5:].strip()
+
+            if ":" in ack_payload:
+                # It's a file chunk ACK like [ACK]0001:45
+                chunk_id = ack_payload.split(":")[0]
+                self.ack_manager.ack_received(f"FT_{chunk_id}", from_call=src)
+            elif ack_payload == "FILE_INIT":
+                self.ack_manager.ack_received("FILE_INIT", from_call=src)
+            elif ack_payload == "EOF_FINAL":
+                self.ack_manager.ack_received("EOF_FINAL", from_call=src)
+            else:
+                # It's a message ACK like [ACK]abc12345
+                self.ack_manager.ack_received(ack_payload, from_call=src)
+
+            self.ft.handle_ack(info)
+            return
+
+
+        elif info.startswith("[NACK]") or info.startswith("[NACKFILE]"):
+            nack_id = info[6:].strip()
+            self.ack_manager.ack_received(nack_id, from_call=src)
+            self.gui.append_text(f"❌ Transfer failed or was declined: {nack_id}", "recv")
+            return
+
 
         # 🟡 Auto reply with ACK (only if enabled)
         if "[MSGID]" in info and "|" in info and self.gui.acks_enabled_var.get():
@@ -289,6 +391,9 @@ class PacketChatApp:
 
         # Log and display
         append_log(src.upper(), src.upper(), info)
+        # 🧹 Strip [MSGID] from incoming messages for clean display
+        if info.startswith("[MSGID]") and "|" in info:
+            info = info.split("|", 1)[1]
         self.gui.append_text(f"{src}>{dest}{path_str}: {info}", "recv")
 
     def check_channel_clear(self):

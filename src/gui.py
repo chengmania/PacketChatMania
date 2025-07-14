@@ -97,7 +97,7 @@ class PacketChatGUI:
         ttk.Separator(self.root).grid(row=1, column=0, sticky="ew", padx=10, pady=5)
 
         # --- Main Message + Heard Stations Frame ---
-        message_container = ttk.Frame(self.root)
+        message_container = ttk.Labelframe(self.root, text="📥 Incoming Messages", padding=5)
         message_container.grid(row=2, column=0, sticky="nsew")
         message_container.columnconfigure(0, weight=3)
         message_container.columnconfigure(1, weight=1)
@@ -145,18 +145,22 @@ class PacketChatGUI:
 
         ttk.Separator(self.root).grid(row=3, column=0, sticky="ew", padx=5, pady=2)
 
-        bottom_frame = ttk.Frame(self.root, padding=5)
+        bottom_frame = ttk.Labelframe(self.root, text="✏️ Compose Message", padding=5)
         bottom_frame.grid(row=4, column=0, sticky="ew")
         bottom_frame.columnconfigure(0, weight=1)
 
         self.msg_entry = ttk.Entry(bottom_frame)
+        self.msg_entry.bind("<KeyRelease>", self.on_msg_entry_change)
         self.msg_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self.char_count_label = ttk.Label(bottom_frame, text="0 / 200")
+        self.char_count_label.grid(row=0, column=1, sticky="e", padx=(0, 5))
+
 
         self.send_button = ttk.Button(bottom_frame, text="Send Msg")
-        self.send_button.grid(row=0, column=1)
+        self.send_button.grid(row=0, column=2)
 
         self.send_file_button = ttk.Button(bottom_frame, text="Send File")
-        self.send_file_button.grid(row=0, column=2, padx=(5, 0))
+        self.send_file_button.grid(row=0, column=3, padx=(5, 0))
 
         self.progress_var = ttk.DoubleVar(value=0)
         self.progress = ttk.Progressbar(bottom_frame, variable=self.progress_var, maximum=100)
@@ -225,12 +229,27 @@ class PacketChatGUI:
         self.msg_entry.insert(0, msg)
         self.send_button.invoke()
 
+    def on_msg_entry_change(self, event=None):
+        value = self.msg_entry.get()
+        if len(value) > 200:
+            self.msg_entry.delete(200, 'end')
+            value = self.msg_entry.get()
+        self.char_count_label.config(
+            text=f"{len(value)} / 200",
+            foreground="red" if len(value) > 190 else "black"
+        )
 
-    def append_text(self, text, tag=None):
+
+
+    def append_text(self, text, tag=None, custom_tag=None):
         self.text_area.config(state='normal')
-        self.text_area.insert('end', text + '\n', tag)
+        if custom_tag:
+            self.text_area.insert('end', text + '\n', (tag, custom_tag))
+        else:
+            self.text_area.insert('end', text + '\n', tag)
         self.text_area.config(state='disabled')
         self.text_area.yview('end')
+
 
     def open_raw_window(self):
         if self.raw_window is not None and tk.Toplevel.winfo_exists(self.raw_window):
@@ -273,30 +292,45 @@ class PacketChatGUI:
         user_config = config_data["User"]
         beacon_config = config_data["Beacon"]
 
-
         config_win = tk.Toplevel(self.root)
         config_win.title("Configure")
-        config_win.geometry("300x580")
+        config_win.geometry("320x580")
         config_win.resizable(False, False)
 
-        ttk.Label(config_win, text="TNC Host:").pack(pady=(10, 0))
+        # Create a scrollable canvas inside the config window
+        canvas = tk.Canvas(config_win, borderwidth=0)
+        frame = ttk.Frame(canvas)
+        scrollbar = ttk.Scrollbar(config_win, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        def on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        frame.bind("<Configure>", on_frame_configure)
+
+        # Create all config widgets inside the scrollable frame
+        ttk.Label(frame, text="TNC Host:").pack(pady=(10, 0))
         host_var = tk.StringVar(value=tnc_config.get("host", "127.0.0.1"))
-        host_entry = ttk.Entry(config_win, textvariable=host_var)
+        host_entry = ttk.Entry(frame, textvariable=host_var)
         host_entry.pack(padx=10)
 
-        ttk.Label(config_win, text="TNC Port:").pack(pady=(10, 0))
+        ttk.Label(frame, text="TNC Port:").pack(pady=(10, 0))
         port_var = tk.StringVar(value=tnc_config.get("port", "8001"))
-        port_entry = ttk.Entry(config_win, textvariable=port_var)
+        port_entry = ttk.Entry(frame, textvariable=port_var)
         port_entry.pack(padx=10)
 
-        ttk.Label(config_win, text="Your Callsign:").pack(pady=(10, 0))
+        ttk.Label(frame, text="Your Callsign:").pack(pady=(10, 0))
         callsign_var = tk.StringVar(value=user_config.get("callsign", "N0CALL"))
-        callsign_entry = ttk.Entry(config_win, textvariable=callsign_var)
+        callsign_entry = ttk.Entry(frame, textvariable=callsign_var)
         callsign_entry.pack(padx=10)
 
-        ttk.Label(config_win, text="CQ Message:").pack(pady=(10, 0))
+        ttk.Label(frame, text="CQ Message:").pack(pady=(10, 0))
         cq_msg_var = tk.StringVar(value=user_config.get("cq_message", f"CQ CQ CQ de {callsign_var.get()}"))
-        cq_msg_entry = ttk.Entry(config_win, textvariable=cq_msg_var)
+        cq_msg_entry = ttk.Entry(frame, textvariable=cq_msg_var)
         cq_msg_entry.pack(padx=10)
 
         beacon_enabled_var = tk.BooleanVar(value=beacon_config.get("enabled", "false").lower() == "true")
@@ -304,17 +338,17 @@ class PacketChatGUI:
         beacon_message_var = tk.StringVar(value=beacon_config.get("message", "ChatMania App with mailbox"))
         beacon_digi_var = tk.StringVar(value=beacon_config.get("digipeater", ""))
 
-        ttk.Label(config_win, text="Enable Beaconing:").pack(pady=(10, 0))
-        ttk.Checkbutton(config_win, variable=beacon_enabled_var).pack()
+        ttk.Label(frame, text="Enable Beaconing:").pack(pady=(10, 0))
+        ttk.Checkbutton(frame, variable=beacon_enabled_var).pack()
 
-        ttk.Label(config_win, text="Beacon Interval (min):").pack(pady=(10, 0))
-        ttk.Entry(config_win, textvariable=beacon_interval_var).pack(padx=10)
+        ttk.Label(frame, text="Beacon Interval (min):").pack(pady=(10, 0))
+        ttk.Entry(frame, textvariable=beacon_interval_var).pack(padx=10)
 
-        ttk.Label(config_win, text="Beacon Message:").pack(pady=(10, 0))
-        ttk.Entry(config_win, textvariable=beacon_message_var).pack(padx=10)
+        ttk.Label(frame, text="Beacon Message:").pack(pady=(10, 0))
+        ttk.Entry(frame, textvariable=beacon_message_var).pack(padx=10)
 
-        ttk.Label(config_win, text="Beacon Digipeater (optional):").pack(pady=(10, 0))
-        ttk.Entry(config_win, textvariable=beacon_digi_var).pack(padx=10)
+        ttk.Label(frame, text="Beacon Digipeater (optional):").pack(pady=(10, 0))
+        ttk.Entry(frame, textvariable=beacon_digi_var).pack(padx=10)
 
         def save_and_close():
             new_config = {
@@ -327,18 +361,19 @@ class PacketChatGUI:
                     "cq_message": cq_msg_var.get(),
                     "acks": str(self.acks_enabled_var.get()).lower()
                 },
-                 "Beacon": {
+                "Beacon": {
                     "enabled": str(beacon_enabled_var.get()).lower(),
                     "interval": beacon_interval_var.get(),
                     "message": beacon_message_var.get(),
                     "digipeater": beacon_digi_var.get()
                 }
             }
+
             old_enabled = self.config.getboolean("Beacon", "enabled", fallback=False)
             new_enabled = beacon_enabled_var.get()
 
             config.save_config(new_config)
-            # Update main display if needed
+
             self.host_label_var.set(new_config["TNC"]["host"])
             self.port_label_var.set(new_config["TNC"]["port"])
             self.callsign_label_var.set(new_config["User"]["callsign"])
@@ -348,19 +383,18 @@ class PacketChatGUI:
             self.config["Beacon"]["message"] = beacon_message_var.get()
             self.config["Beacon"]["digipeater"] = beacon_digi_var.get()
 
-            # Update beacon light
             self.set_beacon_light("green" if new_enabled else "gray")
 
-            # ✅ Call main app to start/stop beacon manager
             if hasattr(self, "on_beacon_toggle") and callable(self.on_beacon_toggle):
                 if old_enabled != new_enabled:
                     self.on_beacon_toggle(new_enabled)
 
-
             config_win.destroy()
 
-        ttk.Button(config_win, text="Save", command=save_and_close).pack(pady=10)
+        ttk.Button(frame, text="Save", command=save_and_close).pack(pady=10)
 
+
+    #legacy code-  now using update_heard_station
     def add_heard_station(self, call, timestamp, msg_type="direct"):
         when_str = timestamp.strftime("%H:%M")
         label_type = msg_type.upper()
@@ -372,6 +406,7 @@ class PacketChatGUI:
 
         self.heard_tree.insert("", 0, values=(when_str, call, label_type))
 
+    ###############################################
 
     def on_heard_click(self, event):
         selected = self.heard_tree.selection()
@@ -474,4 +509,20 @@ class PacketChatGUI:
         if self.tooltip:
             self.tooltip.destroy()
             self.tooltip = None
+
+    def mark_ack_received(self, line_tag, mark="✓"):
+        self.text_area.config(state='normal')
+        try:
+            start_idx = self.text_area.index(f"{line_tag}.first")
+            end_idx = self.text_area.index(f"{line_tag}.last")
+            content = self.text_area.get(start_idx, end_idx)
+            # Only update if it doesn't already end with the mark
+            if not content.strip().endswith(mark):
+                self.text_area.delete(start_idx, end_idx)
+                new_content = content.rstrip("\n") + f" {mark}\n"
+                self.text_area.insert(start_idx, new_content, ("sent", line_tag))
+        except Exception as e:
+            print(f"ACK mark failed for {line_tag}: {e}")
+        self.text_area.config(state='disabled')
+
 

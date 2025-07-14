@@ -25,7 +25,11 @@ class AckManager:
 
     def ack_received(self, msg_id, from_call=None):
         if msg_id not in self.pending:
-            self.debug_fn(f"⚠️ Unknown ACK for {msg_id} — ignoring")
+            msg = f"⚠️ Unknown ACK for {msg_id} — ignoring"
+            self.debug_fn(msg)
+            log_raw_line(msg)
+            log_raw_line(f"⚠️ ACK for unknown or expired msg_id: {msg_id} (from {from_call})")
+
             return
 
         original = self.pending[msg_id]
@@ -33,21 +37,31 @@ class AckManager:
 
         # 🔒 Suppress self-heard ACK
         if from_call and from_call.upper() == self.my_call.upper():
-            self.debug_fn(f"❌ Ignoring ACK from self ({from_call})")
+            msg = f"❌ Ignoring ACK from self ({from_call})"
+            self.debug_fn(msg)
             log_raw_line(f"[IGNORED ACK] {msg_id} from {from_call} (self-heard)")
             return
 
         # ❌ Suppress ACKs from unexpected stations
         if from_call and from_call.upper() != expected.upper():
-            message = f"[IGNORED ACK] {msg_id} from {from_call} (expected {expected})"
-            self.debug_fn(f"❌ {message}")
-            log_raw_line(message)
+            msg = f"❌ [IGNORED ACK] {msg_id} from {from_call} (expected {expected})"
+            self.debug_fn(msg)
+            log_raw_line(msg)
             return
 
         self.debug_fn(f"✅ ACK received for {msg_id} from {from_call or 'unknown'}")
-        self.alert_fn(f"[ACK] {msg_id} received", "sent")
         log_raw_line(f"[ACK] {msg_id} received from {from_call or 'unknown'}")
-        del self.pending[msg_id]
+
+        self.pending[msg_id]["acknowledged"] = True
+
+
+        if hasattr(self, "gui_ref") and hasattr(self.gui_ref, "sent_line_tags"):
+            tag = self.gui_ref.sent_line_tags.get(msg_id)
+            if tag and hasattr(self.gui_ref.gui, "mark_ack_received"):
+                self.gui_ref.gui.mark_ack_received(tag, "✓")
+
+        #del self.pending[msg_id]
+
 
 
     def tick(self):
@@ -92,6 +106,9 @@ class AckManager:
 
 
         for msg_id in expired_ids:
+            if self.pending.get(msg_id, {}).get("acknowledged"):
+                self.debug_fn(f"✅ Skipping deletion for {msg_id}, already acknowledged")
+                continue
             del self.pending[msg_id]
 
 
@@ -101,8 +118,10 @@ class AckManager:
 
         if not self.enabled and not force:
             return
+
         if msg_id in self.pending:
             self.debug_fn(f"⚠️ Overwriting existing pending msg_id: {msg_id}")
+
         self.pending[msg_id] = {
             "src": src,
             "dest": dest,
@@ -110,5 +129,17 @@ class AckManager:
             "digi": digi,
             "retries": 0,
             "timestamp": time.time(),
-            "type": msg_type
+            "type": msg_type,
+            "acknowledged": False  # ✅ This was missing!
         }
+
+
+    def is_acknowledged(self, msg_id):
+        if msg_id in self.pending:
+            status = self.pending[msg_id].get("acknowledged", False)
+            log_raw_line(f"🔍 Checking if {msg_id} is acknowledged → {status}")
+            return status
+        log_raw_line(f"🔍 is_acknowledged({msg_id}) → False (not tracked)")
+        return False
+        """Return True if message was ACK'd (and removed from retry queue)."""
+        return msg_id not in self.tracked
